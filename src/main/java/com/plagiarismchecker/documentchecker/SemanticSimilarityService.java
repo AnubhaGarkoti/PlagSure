@@ -3,9 +3,9 @@ package com.plagiarismchecker.documentchecker;
 import ai.djl.huggingface.tokenizers.HuggingFaceTokenizer;
 import ai.onnxruntime.*;
 
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
+import java.io.InputStream;
 import java.nio.LongBuffer;
 import java.util.HashMap;
 import java.util.Map;
@@ -21,20 +21,46 @@ public class SemanticSimilarityService {
 
         environment = OrtEnvironment.getEnvironment();
 
-        ClassPathResource modelResource =
-                new ClassPathResource("models/model.onnx");
+        // Load ONNX model directly from the JAR/classpath
+        InputStream modelStream =
+                getClass().getClassLoader()
+                        .getResourceAsStream("models/model.onnx");
+
+        if (modelStream == null) {
+            throw new RuntimeException(
+                    "models/model.onnx not found in classpath."
+            );
+        }
+
+        byte[] modelBytes;
+
+        try (modelStream) {
+            modelBytes = modelStream.readAllBytes();
+        }
 
         session = environment.createSession(
-                modelResource.getFile().getAbsolutePath(),
+                modelBytes,
                 new OrtSession.SessionOptions()
         );
 
-        ClassPathResource tokenizerResource =
-        new ClassPathResource("models/tokenizer.json");
+        // Load tokenizer directly from the JAR/classpath
+        InputStream tokenizerStream =
+                getClass().getClassLoader()
+                        .getResourceAsStream("models/tokenizer.json");
 
-tokenizer = HuggingFaceTokenizer.newInstance(
-        tokenizerResource.getFile().toPath()
-);
+        if (tokenizerStream == null) {
+            throw new RuntimeException(
+                    "models/tokenizer.json not found in classpath."
+            );
+        }
+
+        try (tokenizerStream) {
+            tokenizer =
+                    HuggingFaceTokenizer.newInstance(
+                            tokenizerStream,
+                            null
+                    );
+        }
     }
 
     public double calculateSimilarity(
@@ -154,36 +180,49 @@ tokenizer = HuggingFaceTokenizer.newInstance(
                         result.get(0).getValue();
 
                 float[][][] output =
-        (float[][][]) value;
+                        (float[][][]) value;
 
-float[][] tokenEmbeddings = output[0];
+                float[][] tokenEmbeddings =
+                        output[0];
 
-int dimensions = tokenEmbeddings[0].length;
+                int dimensions =
+                        tokenEmbeddings[0].length;
 
-float[] sentenceEmbedding =
-        new float[dimensions];
+                float[] sentenceEmbedding =
+                        new float[dimensions];
 
-int validTokens = 0;
+                int validTokens = 0;
 
-for (int i = 0; i < length; i++) {
+                for (int i = 0;
+                     i < length;
+                     i++) {
 
-    if (attentionMask[i] == 1) {
+                    if (attentionMask[i] == 1) {
 
-        for (int j = 0; j < dimensions; j++) {
-            sentenceEmbedding[j] +=
-                    tokenEmbeddings[i][j];
-        }
+                        for (int j = 0;
+                             j < dimensions;
+                             j++) {
 
-        validTokens++;
-    }
-}
+                            sentenceEmbedding[j] +=
+                                    tokenEmbeddings[i][j];
+                        }
 
-for (int j = 0; j < dimensions; j++) {
-    sentenceEmbedding[j] /=
-            Math.max(validTokens, 1);
-}
+                        validTokens++;
+                    }
+                }
 
-return sentenceEmbedding;
+                for (int j = 0;
+                     j < dimensions;
+                     j++) {
+
+                    sentenceEmbedding[j] /=
+                            Math.max(
+                                    validTokens,
+                                    1
+                            );
+                }
+
+                return sentenceEmbedding;
             }
         }
     }
