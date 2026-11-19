@@ -6,7 +6,10 @@ import ai.onnxruntime.*;
 import org.springframework.stereotype.Service;
 
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.LongBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -21,7 +24,13 @@ public class SemanticSimilarityService {
 
         environment = OrtEnvironment.getEnvironment();
 
-        // Load ONNX model directly from the JAR/classpath
+        /*
+         * Load the ONNX model from the JAR into a temporary file
+         * instead of readAllBytes().
+         *
+         * This avoids putting the entire model into Java heap memory
+         * on Render.
+         */
         InputStream modelStream =
                 getClass().getClassLoader()
                         .getResourceAsStream("models/model.onnx");
@@ -32,18 +41,33 @@ public class SemanticSimilarityService {
             );
         }
 
-        byte[] modelBytes;
+        Path modelFile = Files.createTempFile(
+                "plagsure-model-",
+                ".onnx"
+        );
 
-        try (modelStream) {
-            modelBytes = modelStream.readAllBytes();
+        try (InputStream input = modelStream;
+             OutputStream output = Files.newOutputStream(modelFile)) {
+
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+
+            while ((bytesRead = input.read(buffer)) != -1) {
+                output.write(buffer, 0, bytesRead);
+            }
         }
 
+        /*
+         * Load the ONNX model directly from the temporary file.
+         */
         session = environment.createSession(
-                modelBytes,
+                modelFile.toString(),
                 new OrtSession.SessionOptions()
         );
 
-        // Load tokenizer directly from the JAR/classpath
+        /*
+         * Load tokenizer.
+         */
         InputStream tokenizerStream =
                 getClass().getClassLoader()
                         .getResourceAsStream("models/tokenizer.json");
@@ -68,7 +92,6 @@ public class SemanticSimilarityService {
             String text2) {
 
         try {
-
             float[] embedding1 =
                     generateEmbedding(text1);
 
@@ -96,8 +119,7 @@ public class SemanticSimilarityService {
             String text) throws Exception {
 
         long[] tokenIds =
-                tokenizer.encode(text)
-                        .getIds();
+                tokenizer.encode(text).getIds();
 
         int maxLength = 128;
 
@@ -118,7 +140,8 @@ public class SemanticSimilarityService {
             inputIds[i] =
                     tokenIds[i];
 
-            attentionMask[i] = 1;
+            attentionMask[i] =
+                    1;
         }
 
         long[] shape = {
@@ -173,8 +196,10 @@ public class SemanticSimilarityService {
                     tokenTypeTensor
             );
 
-            try (OrtSession.Result result =
-                         session.run(inputs)) {
+            try (
+                    OrtSession.Result result =
+                            session.run(inputs)
+            ) {
 
                 Object value =
                         result.get(0).getValue();
@@ -203,8 +228,8 @@ public class SemanticSimilarityService {
                              j < dimensions;
                              j++) {
 
-                            sentenceEmbedding[j] +=
-                                    tokenEmbeddings[i][j];
+                            sentenceEmbedding[j]
+                                    += tokenEmbeddings[i][j];
                         }
 
                         validTokens++;
@@ -256,13 +281,15 @@ public class SemanticSimilarityService {
         }
 
         if (magnitude1 == 0 ||
-                magnitude2 == 0) {
+            magnitude2 == 0) {
 
             return 0.0;
         }
 
         return dotProduct /
-                (Math.sqrt(magnitude1) *
-                        Math.sqrt(magnitude2));
+                (
+                    Math.sqrt(magnitude1) *
+                    Math.sqrt(magnitude2)
+                );
     }
 }
